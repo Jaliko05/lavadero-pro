@@ -64,21 +64,52 @@ func (h *PayrollHandler) Generate(c *gin.Context) {
 			Where("employee_id = ? AND active = ?", emp.ID, true).
 			Select("COALESCE(SUM(value),0)").Row().Scan(&commissionTotal)
 
-		grossTotal := emp.BaseSalary + commissionTotal
-		healthDeduction := grossTotal * 0.04
-		pensionDeduction := grossTotal * 0.04
+		var baseSalaryCalc float64
+
+		switch emp.PaymentType {
+		case "per_wash":
+			// Count DELIVERED turns in period
+			var turnCount int64
+			h.DB.TT(uc.ClientID, "turns").
+				Where("assigned_employee_id = ? AND status = ? AND created_at >= ? AND created_at <= ?",
+					emp.ID, "DELIVERED", req.PeriodStart, req.PeriodEnd+" 23:59:59").
+				Count(&turnCount)
+			baseSalaryCalc = float64(turnCount) * emp.AmountPerWash
+
+		case "percentage":
+			// Sum total_price from DELIVERED turns in period
+			var turnRevenue float64
+			h.DB.TT(uc.ClientID, "turns").
+				Where("assigned_employee_id = ? AND status = ? AND created_at >= ? AND created_at <= ?",
+					emp.ID, "DELIVERED", req.PeriodStart, req.PeriodEnd+" 23:59:59").
+				Select("COALESCE(SUM(total_price), 0)").Row().Scan(&turnRevenue)
+			baseSalaryCalc = turnRevenue * (emp.PercentageRate / 100)
+
+		default: // fixed_salary
+			baseSalaryCalc = emp.BaseSalary
+		}
+
+		grossTotal := baseSalaryCalc + commissionTotal
+
+		// Deductions: only for non-prestacion_servicios contracts
+		var healthDeduction, pensionDeduction float64
+		if emp.ContractType != "prestacion_servicios" {
+			healthDeduction = grossTotal * 0.04
+			pensionDeduction = grossTotal * 0.04
+		}
+
 		netPay := grossTotal - healthDeduction - pensionDeduction
 
 		item := domain.PayrollItem{
-			PayrollID:       payroll.ID,
-			EmployeeID:      emp.ID,
-			BaseSalary:      emp.BaseSalary,
-			WorkedDays:      int(workedDays),
-			Commissions:     commissionTotal,
-			GrossTotal:      grossTotal,
-			HealthDeduction: healthDeduction,
+			PayrollID:        payroll.ID,
+			EmployeeID:       emp.ID,
+			BaseSalary:       baseSalaryCalc,
+			WorkedDays:       int(workedDays),
+			Commissions:      commissionTotal,
+			GrossTotal:       grossTotal,
+			HealthDeduction:  healthDeduction,
 			PensionDeduction: pensionDeduction,
-			NetPay:          netPay,
+			NetPay:           netPay,
 		}
 		tx.Table("payroll_items").Create(&item)
 

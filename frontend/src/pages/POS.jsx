@@ -1,8 +1,9 @@
 import { useState, useEffect, useMemo } from 'react';
 import { listSales, createSale, createPayment, getCurrentCashRegister, openCashRegister, closeCashRegister } from '@/api/sales';
 import { listProducts } from '@/api/products';
+import { initWompiPayment } from '@/api/payments';
 import { formatCurrency, formatDateTime } from '@/lib/utils';
-import { ShoppingCart, Plus, Minus, Trash2, CreditCard, DollarSign, Wallet, Search, Package } from 'lucide-react';
+import { ShoppingCart, Plus, Minus, Trash2, CreditCard, DollarSign, Wallet, Search, Package, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 
 const TABS = [
@@ -37,6 +38,11 @@ export default function POS() {
   const [modal, setModal] = useState(null); // null | 'payment' | 'open-register' | 'close-register'
   const [paymentForm, setPaymentForm] = useState({ method: 'efectivo', amount: '', reference: '' });
   const [registerForm, setRegisterForm] = useState({ opening_amount: '', closing_amount: '', notes: '' });
+
+  // Wompi payment state
+  const [wompiLoading, setWompiLoading] = useState(false);
+  const [wompiPending, setWompiPending] = useState(false);
+  const [customerEmail, setCustomerEmail] = useState('');
 
   // Ventas del Dia - expandable rows
   const [expandedSale, setExpandedSale] = useState(null);
@@ -136,6 +142,21 @@ export default function POS() {
     return Math.max(0, paid - total);
   }, [paymentForm.method, paymentForm.amount, total]);
 
+  // Map local payment method names to Wompi payment_method_type
+  function getWompiMethodType(method) {
+    const map = {
+      tarjeta: 'CARD',
+      nequi: 'NEQUI',
+      transferencia: 'BANCOLOMBIA_TRANSFER',
+      daviplata: 'DAVIPLATA',
+    };
+    return map[method] || null;
+  }
+
+  function isWompiMethod(method) {
+    return ['nequi', 'tarjeta', 'transferencia', 'daviplata'].includes(method);
+  }
+
   async function handleCompleteSale(e) {
     e.preventDefault();
     try {
@@ -148,21 +169,82 @@ export default function POS() {
       const saleRes = await createSale(salePayload);
       const saleId = saleRes.data?.id;
 
-      if (saleId) {
+      if (!saleId) {
+        toast.error('Error al crear la venta');
+        return;
+      }
+
+      if (isWompiMethod(paymentForm.method)) {
+        // Process payment through Wompi gateway
+        setWompiLoading(true);
+        try {
+          const wompiPayload = {
+            amount: Math.round(total * 100), // Amount in centavos
+            currency: 'COP',
+            buyer_email: customerEmail || '',
+            payment_method_type: getWompiMethodType(paymentForm.method),
+            reference: 'sale-' + saleId,
+            installments: paymentForm.method === 'tarjeta' ? 1 : undefined,
+          };
+
+          const wompiRes = await initWompiPayment(wompiPayload);
+          const data = wompiRes.data;
+
+          if (data?.public_key && data?.signature) {
+            // Widget flow - redirect to Wompi checkout
+            toast.info('Redirigiendo a pasarela de pago...');
+            // The Wompi widget will handle the payment, webhook will confirm it
+            setWompiPending(true);
+            setCart([]);
+            setDiscountValue('');
+            setSaleNotes('');
+            setCustomerEmail('');
+            setModal(null);
+            loadData();
+          } else if (data?.transaction_id && data?.status === 'APPROVED') {
+            // S2S flow - payment approved immediately
+            toast.success('Pago aprobado exitosamente');
+            setCart([]);
+            setDiscountValue('');
+            setSaleNotes('');
+            setCustomerEmail('');
+            setModal(null);
+            loadData();
+          } else if (data?.status === 'PENDING' || data?.transaction_id) {
+            // Payment pending confirmation
+            toast.info('Pago pendiente de confirmacion. Se actualizara automaticamente.');
+            setWompiPending(true);
+            setCart([]);
+            setDiscountValue('');
+            setSaleNotes('');
+            setCustomerEmail('');
+            setModal(null);
+            loadData();
+          } else {
+            toast.error('Error al iniciar pago con pasarela');
+          }
+        } catch {
+          toast.error('Error al procesar pago con pasarela');
+        } finally {
+          setWompiLoading(false);
+        }
+      } else {
+        // Cash payment - process directly
         await createPayment({
           sale_id: saleId,
           method: paymentForm.method,
           amount: parseFloat(paymentForm.amount),
           reference: paymentForm.reference,
         });
-      }
 
-      toast.success('Venta completada');
-      setCart([]);
-      setDiscountValue('');
-      setSaleNotes('');
-      setModal(null);
-      loadData();
+        toast.success('Venta completada');
+        setCart([]);
+        setDiscountValue('');
+        setSaleNotes('');
+        setCustomerEmail('');
+        setModal(null);
+        loadData();
+      }
     } catch {
       toast.error('Error al procesar la venta');
     }
@@ -220,6 +302,27 @@ export default function POS() {
           </span>
         </div>
       </div>
+
+      {/* Wompi Pending Payment Banner */}
+      {wompiPending && (
+        <div className="bg-yellow-50 border border-yellow-300 rounded-lg p-4 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-yellow-100 rounded-full">
+              <Loader2 className="h-5 w-5 text-yellow-600 animate-spin" />
+            </div>
+            <div>
+              <p className="font-medium text-yellow-800">Pago pendiente de confirmacion</p>
+              <p className="text-sm text-yellow-700">Se actualizara automaticamente cuando Wompi confirme el pago.</p>
+            </div>
+          </div>
+          <button
+            onClick={() => { setWompiPending(false); loadData(); }}
+            className="text-sm text-yellow-700 underline hover:text-yellow-900"
+          >
+            Cerrar
+          </button>
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="border-b">
@@ -660,8 +763,29 @@ export default function POS() {
                 </div>
               )}
 
-              {/* Reference for non-cash */}
-              {paymentForm.method !== 'efectivo' && (
+              {/* Email for Wompi payment methods */}
+              {isWompiMethod(paymentForm.method) && (
+                <div>
+                  <label className="block text-sm font-medium mb-1">Email del comprador</label>
+                  <input
+                    type="email"
+                    value={customerEmail}
+                    onChange={e => setCustomerEmail(e.target.value)}
+                    placeholder="correo@ejemplo.com"
+                    className="w-full border rounded-lg px-3 py-2"
+                  />
+                </div>
+              )}
+
+              {/* Wompi method info banner */}
+              {isWompiMethod(paymentForm.method) && (
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm text-blue-700">
+                  El pago sera procesado a traves de la pasarela Wompi ({paymentForm.method === 'tarjeta' ? 'Tarjeta' : paymentForm.method === 'nequi' ? 'Nequi' : paymentForm.method === 'transferencia' ? 'Transferencia Bancolombia' : 'Daviplata'}).
+                </div>
+              )}
+
+              {/* Reference for non-cash non-wompi */}
+              {paymentForm.method !== 'efectivo' && !isWompiMethod(paymentForm.method) && (
                 <div>
                   <label className="block text-sm font-medium mb-1">Referencia</label>
                   <input
@@ -679,15 +803,25 @@ export default function POS() {
                   type="button"
                   onClick={() => setModal(null)}
                   className="flex-1 border rounded-lg py-2.5 font-medium hover:bg-gray-50"
+                  disabled={wompiLoading}
                 >
                   Cancelar
                 </button>
                 <button
                   type="submit"
-                  disabled={(parseFloat(paymentForm.amount) || 0) < total && paymentForm.method === 'efectivo' ? false : false}
-                  className="flex-1 bg-primary text-white rounded-lg py-2.5 font-medium hover:bg-primary/90"
+                  disabled={wompiLoading}
+                  className="flex-1 bg-primary text-white rounded-lg py-2.5 font-medium hover:bg-primary/90 flex items-center justify-center gap-2"
                 >
-                  Confirmar Pago
+                  {wompiLoading ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Procesando...
+                    </>
+                  ) : isWompiMethod(paymentForm.method) ? (
+                    'Pagar con Wompi'
+                  ) : (
+                    'Confirmar Pago'
+                  )}
                 </button>
               </div>
             </form>

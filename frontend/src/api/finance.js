@@ -26,3 +26,4 @@ export const payAccountReceivable = (id, data) => apiClient.post(`/v1/wash/admin
 // Reports
 export const getCashFlow = (params) => apiClient.get('/v1/wash/admin/cash-flow', { params });
 export const getProfitLoss = (params) => apiClient.get('/v1/wash/admin/profit-loss', { params });
+export const getProfitability = (params) => apiClient.get('/v1/wash/admin/reports/profitability', { params });

@@ -16,7 +16,14 @@ const EMPTY_EMPLOYEE = {
   full_name: '', document_type: 'CC', document_number: '', phone: '', address: '',
   role: 'lavador', base_salary: 0, contract_type: 'fijo', hire_date: '',
   bank_name: '', bank_account: '', eps: '', afp: '', status: 'activo',
+  payment_type: 'fixed_salary', amount_per_wash: 0, percentage_rate: 0,
 };
+
+const PAYMENT_TYPES = [
+  { value: 'fixed_salary', label: 'Salario Fijo' },
+  { value: 'per_wash', label: 'Por Lavado' },
+  { value: 'percentage', label: 'Porcentaje' },
+];
 
 const EMPTY_SCHEDULE = { employee_id: '', day_of_week: 'lunes', start_time: '08:00', end_time: '17:00' };
 const EMPTY_COMMISSION = { employee_id: '', wash_service_id: '', percentage: 0, fixed_amount: 0 };
@@ -75,12 +82,26 @@ export default function Employees() {
   }
 
   function openCreate() { setForm(EMPTY_EMPLOYEE); setModal('create'); }
-  function openEdit(emp) { setForm({ ...emp, hire_date: emp.hire_date ? emp.hire_date.substring(0, 10) : '' }); setModal('edit'); }
+  function openEdit(emp) {
+    setForm({
+      ...emp,
+      hire_date: emp.hire_date ? emp.hire_date.substring(0, 10) : '',
+      payment_type: emp.payment_type || 'fixed_salary',
+      amount_per_wash: emp.amount_per_wash || 0,
+      percentage_rate: emp.percentage_rate || 0,
+    });
+    setModal('edit');
+  }
 
   async function handleSave(e) {
     e.preventDefault();
     try {
-      const payload = { ...form, base_salary: Number(form.base_salary) };
+      const payload = {
+        ...form,
+        base_salary: Number(form.base_salary),
+        amount_per_wash: Number(form.amount_per_wash),
+        percentage_rate: Number(form.percentage_rate),
+      };
       if (modal === 'create') await createEmployee(payload);
       else await updateEmployee(form.id, payload);
       toast.success(modal === 'create' ? 'Empleado creado exitosamente' : 'Empleado actualizado');
@@ -575,6 +596,34 @@ export default function Employees() {
                   <label className="block text-sm font-medium mb-1">AFP</label>
                   <input value={form.afp || ''} onChange={e => setForm({ ...form, afp: e.target.value })} className="w-full border rounded-lg px-3 py-2" />
                 </div>
+                {/* Esquema de Pago */}
+                <div className="col-span-2 border-t pt-4 mt-2">
+                  <h4 className="text-sm font-semibold text-slate-700 mb-3">Esquema de Pago</h4>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">Tipo de Pago</label>
+                  <select value={form.payment_type || 'fixed_salary'} onChange={e => setForm({ ...form, payment_type: e.target.value })} className="w-full border rounded-lg px-3 py-2">
+                    {PAYMENT_TYPES.map(pt => <option key={pt.value} value={pt.value}>{pt.label}</option>)}
+                  </select>
+                </div>
+                {form.payment_type === 'per_wash' && (
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Monto por Lavado</label>
+                    <input type="number" min="0" step="100" value={form.amount_per_wash || ''} onChange={e => setForm({ ...form, amount_per_wash: e.target.value })} className="w-full border rounded-lg px-3 py-2" />
+                  </div>
+                )}
+                {form.payment_type === 'percentage' && (
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Porcentaje por Servicio (%)</label>
+                    <input type="number" min="0" max="100" step="0.5" value={form.percentage_rate || ''} onChange={e => setForm({ ...form, percentage_rate: e.target.value })} className="w-full border rounded-lg px-3 py-2" />
+                  </div>
+                )}
+                {form.payment_type === 'fixed_salary' && (
+                  <div className="text-xs text-slate-500 flex items-center pt-5">
+                    El salario base configurado arriba se usara como monto fijo.
+                  </div>
+                )}
+
                 {modal === 'edit' && (
                   <div>
                     <label className="block text-sm font-medium mb-1">Estado</label>

@@ -1,7 +1,9 @@
 package handler
 
 import (
+	"math"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/falcore/wash-service/internal/domain"
@@ -392,18 +394,130 @@ func (h *ExpenseHandler) CashFlow(c *gin.Context) {
 	uc := middleware.GetUserContext(c)
 	from := c.DefaultQuery("from", time.Now().AddDate(0, -1, 0).Format("2006-01-02"))
 	to := c.DefaultQuery("to", time.Now().Format("2006-01-02"))
+	projectionDays, _ := strconv.Atoi(c.DefaultQuery("projection_days", "0"))
 
 	var totalIncome, totalExpense float64
 	h.DB.TT(uc.ClientID, "incomes").Where("date >= ? AND date <= ?", from, to).Select("COALESCE(SUM(amount),0)").Row().Scan(&totalIncome)
 	h.DB.TT(uc.ClientID, "expenses").Where("date >= ? AND date <= ?", from, to).Select("COALESCE(SUM(amount),0)").Row().Scan(&totalExpense)
 
-	c.JSON(http.StatusOK, gin.H{
+	// Daily breakdown
+	type DailyRow struct {
+		Date    string  `json:"date"`
+		Amount  float64 `json:"amount"`
+	}
+	var dailyIncomes []DailyRow
+	h.DB.TT(uc.ClientID, "incomes").
+		Where("date >= ? AND date <= ?", from, to).
+		Select("TO_CHAR(date, 'YYYY-MM-DD') as date, SUM(amount) as amount").
+		Group("TO_CHAR(date, 'YYYY-MM-DD')").Order("date ASC").Scan(&dailyIncomes)
+
+	var dailyExpenses []DailyRow
+	h.DB.TT(uc.ClientID, "expenses").
+		Where("date >= ? AND date <= ?", from, to).
+		Select("TO_CHAR(date, 'YYYY-MM-DD') as date, SUM(amount) as amount").
+		Group("TO_CHAR(date, 'YYYY-MM-DD')").Order("date ASC").Scan(&dailyExpenses)
+
+	// Build maps for quick lookup
+	incomeMap := make(map[string]float64)
+	for _, d := range dailyIncomes {
+		incomeMap[d.Date] = d.Amount
+	}
+	expenseMap := make(map[string]float64)
+	for _, d := range dailyExpenses {
+		expenseMap[d.Date] = d.Amount
+	}
+
+	// Generate daily array for all dates in range
+	fromDate, _ := time.Parse("2006-01-02", from)
+	toDate, _ := time.Parse("2006-01-02", to)
+	var daily []gin.H
+	for d := fromDate; !d.After(toDate); d = d.AddDate(0, 0, 1) {
+		ds := d.Format("2006-01-02")
+		inc := incomeMap[ds]
+		exp := expenseMap[ds]
+		daily = append(daily, gin.H{
+			"date":     ds,
+			"income":   inc,
+			"expenses": exp,
+			"net":      inc - exp,
+		})
+	}
+
+	result := gin.H{
 		"from":          from,
 		"to":            to,
 		"total_income":  totalIncome,
 		"total_expense": totalExpense,
 		"net":           totalIncome - totalExpense,
-	})
+		"actual": gin.H{
+			"income":   totalIncome,
+			"expenses": totalExpense,
+			"net":      totalIncome - totalExpense,
+		},
+		"daily": daily,
+	}
+
+	// Projection
+	if projectionDays > 0 {
+		// Calculate average daily income/expense from the last 30 days
+		last30From := time.Now().AddDate(0, 0, -30).Format("2006-01-02")
+		last30To := time.Now().Format("2006-01-02")
+
+		var avgIncome30, avgExpense30 float64
+		h.DB.TT(uc.ClientID, "incomes").
+			Where("date >= ? AND date <= ?", last30From, last30To).
+			Select("COALESCE(SUM(amount),0)").Row().Scan(&avgIncome30)
+		h.DB.TT(uc.ClientID, "expenses").
+			Where("date >= ? AND date <= ?", last30From, last30To).
+			Select("COALESCE(SUM(amount),0)").Row().Scan(&avgExpense30)
+
+		avgDailyIncome := avgIncome30 / 30.0
+		avgDailyExpense := avgExpense30 / 30.0
+
+		// Load active recurring expenses for projection
+		var recurringExpenses []domain.RecurringExpense
+		h.DB.TT(uc.ClientID, "recurring_expenses").Where("active = ?", true).Find(&recurringExpenses)
+
+		// Build recurring expense schedule by day-of-month
+		recurringByDay := make(map[int]float64)
+		for _, re := range recurringExpenses {
+			switch re.Frequency {
+			case "monthly":
+				recurringByDay[re.DueDay] += re.Amount
+			case "biweekly":
+				recurringByDay[re.DueDay] += re.Amount
+				day2 := re.DueDay + 15
+				if day2 > 28 { day2 = 28 }
+				recurringByDay[day2] += re.Amount
+			case "quarterly":
+				recurringByDay[re.DueDay] += re.Amount
+			}
+		}
+
+		startProjection := time.Now().AddDate(0, 0, 1)
+		var projection []gin.H
+		for i := 0; i < projectionDays; i++ {
+			d := startProjection.AddDate(0, 0, i)
+			ds := d.Format("2006-01-02")
+			projIncome := math.Round(avgDailyIncome*100) / 100
+			projExpense := math.Round(avgDailyExpense*100) / 100
+
+			// Add scheduled recurring expenses for this day
+			if extra, ok := recurringByDay[d.Day()]; ok {
+				projExpense += extra
+			}
+
+			projection = append(projection, gin.H{
+				"date":              ds,
+				"projected_income":  projIncome,
+				"projected_expenses": projExpense,
+				"projected_net":     math.Round((projIncome-projExpense)*100) / 100,
+			})
+		}
+		result["projection"] = projection
+	}
+
+	c.JSON(http.StatusOK, result)
 }
 
 // --- Profit & Loss ---

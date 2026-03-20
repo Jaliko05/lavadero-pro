@@ -23,6 +23,9 @@ type Employee struct {
 	ContractType     string         `json:"contract_type"` // fijo, indefinido, obra_labor, prestacion_servicios
 	Role             string         `json:"role"`          // lavador, cajero, recepcionista, admin
 	BaseSalary       float64        `json:"base_salary" gorm:"default:0"`
+	PaymentType      string         `json:"payment_type" gorm:"default:'fixed_salary'"` // fixed_salary, per_wash, percentage
+	AmountPerWash    float64        `json:"amount_per_wash" gorm:"default:0"`
+	PercentageRate   float64        `json:"percentage_rate" gorm:"default:0"`
 	PayFrequency     string         `json:"pay_frequency" gorm:"default:'quincenal'"` // semanal, quincenal, mensual
 	BankName         string         `json:"bank_name"`
 	BankAccount      string         `json:"bank_account"`

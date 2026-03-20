@@ -1,0 +1,19 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "Frontend (Vite)",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": ["/c", "npm", "run", "dev"],
+      "cwd": "frontend",
+      "port": 5173
+    },
+    {
+      "name": "Backend (Go)",
+      "runtimeExecutable": "go",
+      "runtimeArgs": ["run", "main.go"],
+      "cwd": "backend/wash-service",
+      "port": 8082
+    }
+  ]
+}

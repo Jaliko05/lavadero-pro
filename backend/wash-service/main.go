@@ -32,7 +32,7 @@ func main() {
 	r := gin.Default()
 	r.Use(middleware.CORSMiddleware(cfg.CORSOrigins))
 
-	routes.SetupRoutes(r, db, producer)
+	routes.SetupRoutes(r, db, producer, cfg)
 
 	logger.Info("Starting wash-service on port %s", cfg.Port)
 	if err := r.Run(":" + cfg.Port); err != nil {

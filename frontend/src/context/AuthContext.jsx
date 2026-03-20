@@ -37,6 +37,30 @@ export function AuthProvider({ children }) {
 
   const login = useCallback(async (email, password) => {
     const res = await authClient.post('/v1/auth/login', { email, password });
+    if (res.data.otp_required) {
+      return { otpRequired: true, sessionId: res.data.session_id };
+    }
+    const { access_token, user: userData } = res.data;
+    setAccessToken(access_token);
+    setUser(userData);
+    setIsAuthenticated(true);
+    return userData;
+  }, []);
+
+  const verifyLoginOtp = useCallback(async (sessionId, otpCode) => {
+    const res = await authClient.post('/v1/auth/verify-login-otp', {
+      session_id: sessionId,
+      otp_code: otpCode,
+    });
+    const { access_token, user: userData } = res.data;
+    setAccessToken(access_token);
+    setUser(userData);
+    setIsAuthenticated(true);
+    return userData;
+  }, []);
+
+  const loginWithGoogle = useCallback(async (code) => {
+    const res = await authClient.post('/v1/auth/google/exchange', { code });
     const { access_token, user: userData } = res.data;
     setAccessToken(access_token);
     setUser(userData);
@@ -64,6 +88,8 @@ export function AuthProvider({ children }) {
     logout,
     refreshToken,
     hasRole,
+    verifyLoginOtp,
+    loginWithGoogle,
   };
 
   return (

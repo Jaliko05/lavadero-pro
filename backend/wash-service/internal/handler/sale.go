@@ -11,10 +11,13 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-type SaleHandler struct{ DB *repository.DBAdapter }
+type SaleHandler struct {
+	DB       *repository.DBAdapter
+	Notifier *NotificationHelper
+}
 
-func NewSaleHandler(db *repository.DBAdapter) *SaleHandler {
-	return &SaleHandler{DB: db}
+func NewSaleHandler(db *repository.DBAdapter, notifier *NotificationHelper) *SaleHandler {
+	return &SaleHandler{DB: db, Notifier: notifier}
 }
 
 func (h *SaleHandler) Create(c *gin.Context) {
@@ -132,6 +135,9 @@ func (h *SaleHandler) CreatePayment(c *gin.Context) {
 	h.DB.TT(uc.ClientID, "sales").Where("id = ?", req.SaleID).First(&sale)
 	if totalPaid >= sale.Total {
 		h.DB.TT(uc.ClientID, "sales").Where("id = ?", req.SaleID).Update("payment_status", "pagado")
+		if h.Notifier != nil {
+			go h.Notifier.SendPaymentReceipt(uc.ClientID, req.SaleID)
+		}
 	}
 
 	c.JSON(http.StatusCreated, payment)

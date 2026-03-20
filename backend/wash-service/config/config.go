@@ -13,6 +13,7 @@ type Config struct {
 	R2Bucket            string
 	LogLevel            string
 	CORSOrigins         string
+	WompiServiceURL     string
 }
 
 func Load() *Config {
@@ -27,6 +28,7 @@ func Load() *Config {
 		R2Bucket:            getEnv("R2_BUCKET", "wash-uploads"),
 		LogLevel:            getEnv("LOG_LEVEL", "info"),
 		CORSOrigins:         getEnv("CORS_ORIGINS", "http://localhost:5173"),
+		WompiServiceURL:     getEnv("WOMPI_SERVICE_URL", "http://localhost:8083"),
 	}
 }
 

@@ -3,6 +3,7 @@ package routes
 import (
 	"net/http"
 
+	"github.com/falcore/wash-service/config"
 	"github.com/falcore/wash-service/internal/handler"
 	"github.com/falcore/wash-service/internal/messaging"
 	"github.com/falcore/wash-service/internal/middleware"
@@ -11,9 +12,12 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-func SetupRoutes(r *gin.Engine, db *repository.DBAdapter, producer *messaging.Producer) {
+func SetupRoutes(r *gin.Engine, db *repository.DBAdapter, producer *messaging.Producer, cfg *config.Config) {
+	// Initialize notification helper
+	notifier := handler.NewNotificationHelper(db, producer)
+
 	// Initialize all handlers
-	turnH := handler.NewTurnHandler(db)
+	turnH := handler.NewTurnHandler(db, notifier)
 	vehicleCatH := handler.NewVehicleCategoryHandler(db)
 	washSvcH := handler.NewWashServiceHandler(db)
 	clientH := handler.NewClientHandler(db)
@@ -23,7 +27,7 @@ func SetupRoutes(r *gin.Engine, db *repository.DBAdapter, producer *messaging.Pr
 	servicePriceH := handler.NewServicePriceHandler(db)
 	servicePackageH := handler.NewServicePackageHandler(db)
 	productH := handler.NewProductHandler(db)
-	saleH := handler.NewSaleHandler(db)
+	saleH := handler.NewSaleHandler(db, notifier)
 	cashRegisterH := handler.NewCashRegisterHandler(db)
 	employeeH := handler.NewEmployeeHandler(db)
 	commissionH := handler.NewCommissionHandler(db)
@@ -34,11 +38,12 @@ func SetupRoutes(r *gin.Engine, db *repository.DBAdapter, producer *messaging.Pr
 	supplierH := handler.NewSupplierHandler(db)
 	purchaseOrderH := handler.NewPurchaseOrderHandler(db)
 	inventoryH := handler.NewInventoryHandler(db)
-	customerH := handler.NewCustomerHandler(db)
+	customerH := handler.NewCustomerHandler(db, notifier)
 	loyaltyH := handler.NewLoyaltyHandler(db)
 	discountH := handler.NewDiscountHandler(db)
 	washConfigH := handler.NewWashConfigHandler(db)
 	reportH := handler.NewReportHandler(db)
+	paymentGatewayH := handler.NewPaymentGatewayHandler(cfg.WompiServiceURL, db)
 
 	// Observability
 	r.GET("/wash/health", func(c *gin.Context) {
@@ -58,7 +63,11 @@ func SetupRoutes(r *gin.Engine, db *repository.DBAdapter, producer *messaging.Pr
 		pub.GET("/turn-status/:turn_id", turnH.PublicTurnStatus)
 		pub.POST("/ratings", ratingH.CreatePublic)
 		pub.GET("/services", washSvcH.ListPublic)
+		pub.GET("/vehicle-categories", vehicleCatH.List)
 		pub.GET("/clients/:id", clientH.Get)
+
+		// Wompi Webhook (public - called by Wompi servers)
+		pub.POST("/webhooks/wompi", paymentGatewayH.WompiWebhook)
 	}
 
 	// ========================
@@ -84,6 +93,11 @@ func SetupRoutes(r *gin.Engine, db *repository.DBAdapter, producer *messaging.Pr
 		auth.POST("/sales", saleH.Create)
 		auth.GET("/sales", saleH.List)
 		auth.POST("/payments", saleH.CreatePayment)
+
+		// Payment Gateway (Wompi)
+		auth.POST("/payments/wompi/init", paymentGatewayH.InitPayment)
+		auth.GET("/payment-methods", paymentGatewayH.ListPaymentMethods)
+		auth.DELETE("/payment-methods/:id", paymentGatewayH.DeletePaymentMethod)
 
 		// Cash Register
 		auth.POST("/cash-register/open", cashRegisterH.Open)
@@ -166,6 +180,8 @@ func SetupRoutes(r *gin.Engine, db *repository.DBAdapter, producer *messaging.Pr
 		admin.PUT("/employees/:id", employeeH.Update)
 		admin.DELETE("/employees/:id", employeeH.Delete)
 		admin.GET("/employees/:id/attendance", employeeH.GetAttendance)
+		admin.GET("/employees/:id/performance", employeeH.GetPerformance)
+		admin.GET("/employees/:id/earnings", employeeH.GetEarnings)
 
 		// Commissions
 		admin.GET("/commissions", commissionH.List)
@@ -262,6 +278,7 @@ func SetupRoutes(r *gin.Engine, db *repository.DBAdapter, producer *messaging.Pr
 		admin.GET("/reports/clients", reportH.Clients)
 		admin.GET("/reports/inventory", reportH.Inventory)
 		admin.GET("/reports/inventory-movements", reportH.InventoryMovements)
+		admin.GET("/reports/profitability", reportH.Profitability)
 		admin.GET("/reports/:type/csv", reportH.CSVExport)
 
 		// Config

@@ -16,11 +16,12 @@ import (
 )
 
 type TurnHandler struct {
-	DB *repository.DBAdapter
+	DB       *repository.DBAdapter
+	Notifier *NotificationHelper
 }
 
-func NewTurnHandler(db *repository.DBAdapter) *TurnHandler {
-	return &TurnHandler{DB: db}
+func NewTurnHandler(db *repository.DBAdapter, notifier *NotificationHelper) *TurnHandler {
+	return &TurnHandler{DB: db, Notifier: notifier}
 }
 
 func (h *TurnHandler) Create(c *gin.Context) {
@@ -170,11 +171,17 @@ func (h *TurnHandler) UpdateStatus(c *gin.Context) {
 	// Auto-deduct supplies when turn is completed (DONE)
 	if req.Status == "DONE" {
 		h.autoDeductSupplies(uc.ClientID, turnID)
+		if h.Notifier != nil {
+			go h.Notifier.SendTurnReady(uc.ClientID, turnID)
+		}
 	}
 
 	// Auto-accumulate loyalty points when turn is delivered
 	if req.Status == "DELIVERED" {
 		h.autoAccumulateLoyalty(uc.ClientID, turnID)
+		if h.Notifier != nil {
+			go h.Notifier.SendTurnDelivered(uc.ClientID, turnID)
+		}
 	}
 
 	c.JSON(http.StatusOK, dto.MessageResponse{Message: "status updated to " + req.Status})
@@ -339,9 +346,9 @@ func (h *TurnHandler) autoDeductSupplies(clientID, turnID string) {
 				Where("id = ?", sc.WashSupplyID).
 				UpdateColumn("stock", gorm.Expr("stock - ?", sc.QuantityPerService))
 
-			// Get new balance
-			var newStock float64
-			h.DB.TT(clientID, "wash_supplies").Where("id = ?", sc.WashSupplyID).Select("stock").Scan(&newStock)
+			// Get updated supply info
+			var supply domain.WashSupply
+			h.DB.TT(clientID, "wash_supplies").Where("id = ?", sc.WashSupplyID).First(&supply)
 
 			// Record inventory movement
 			h.DB.TT(clientID, "inventory_movements").Create(&domain.InventoryMovement{
@@ -350,10 +357,15 @@ func (h *TurnHandler) autoDeductSupplies(clientID, turnID string) {
 				ItemID:       sc.WashSupplyID,
 				MovementType: "consumption",
 				Quantity:     -sc.QuantityPerService,
-				BalanceAfter: newStock,
+				BalanceAfter: supply.Stock,
 				Reference:    fmt.Sprintf("turn:%s service:%s", turnID, ts.WashServiceID),
 				Date:         now,
 			})
+
+			// Check low stock and send alert
+			if supply.Stock <= supply.MinStock && h.Notifier != nil {
+				go h.Notifier.SendLowStockAlert(clientID, supply.Name, supply.Stock, supply.MinStock)
+			}
 		}
 	}
 }

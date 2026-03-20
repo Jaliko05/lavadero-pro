@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/csv"
 	"fmt"
+	"math"
 	"net/http"
 	"time"
 
@@ -249,6 +250,97 @@ func (h *ReportHandler) InventoryMovements(c *gin.Context) {
 		"from":      from,
 		"to":        to,
 		"movements": movements,
+	})
+}
+
+// Profitability calculates margin per wash service.
+func (h *ReportHandler) Profitability(c *gin.Context) {
+	uc := middleware.GetUserContext(c)
+	from, to := h.defaultRange(c)
+
+	// Get all active wash services
+	var services []domain.WashService
+	h.DB.TT(uc.ClientID, "wash_services").Find(&services)
+
+	type ServiceProfit struct {
+		ServiceID   string  `json:"service_id"`
+		ServiceName string  `json:"service_name"`
+		Revenue     float64 `json:"revenue"`
+		SupplyCost  float64 `json:"supply_cost"`
+		LaborCost   float64 `json:"labor_cost"`
+		Margin      float64 `json:"margin"`
+		MarginPct   float64 `json:"margin_pct"`
+		TurnCount   int64   `json:"turn_count"`
+	}
+
+	var results []ServiceProfit
+
+	for _, svc := range services {
+		sp := ServiceProfit{
+			ServiceID:   svc.ID,
+			ServiceName: svc.Name,
+		}
+
+		// 1. Revenue: SUM of turn_services.price for delivered turns in date range
+		h.DB.TT(uc.ClientID, "turn_services").
+			Joins("JOIN turns ON turns.id = turn_services.turn_id AND turns.client_id = turn_services.client_id").
+			Where("turn_services.wash_service_id = ? AND turns.status = ? AND turns.created_at >= ? AND turns.created_at <= ?",
+				svc.ID, "DELIVERED", from, to).
+			Select("COALESCE(SUM(turn_services.price),0)").Row().Scan(&sp.Revenue)
+
+		// Count of turns for this service
+		h.DB.TT(uc.ClientID, "turn_services").
+			Joins("JOIN turns ON turns.id = turn_services.turn_id AND turns.client_id = turn_services.client_id").
+			Where("turn_services.wash_service_id = ? AND turns.status = ? AND turns.created_at >= ? AND turns.created_at <= ?",
+				svc.ID, "DELIVERED", from, to).
+			Select("COUNT(DISTINCT turns.id)").Row().Scan(&sp.TurnCount)
+
+		if sp.TurnCount == 0 {
+			results = append(results, sp)
+			continue
+		}
+
+		// 2. Supply cost: sum of (quantity_per_service * cost_per_unit) * number of turns
+		var supplyCostPerService float64
+		h.DB.TT(uc.ClientID, "supply_consumptions").
+			Joins("JOIN wash_supplies ON wash_supplies.id = supply_consumptions.wash_supply_id AND wash_supplies.client_id = supply_consumptions.client_id").
+			Where("supply_consumptions.wash_service_id = ?", svc.ID).
+			Select("COALESCE(SUM(supply_consumptions.quantity_per_service * wash_supplies.cost_per_unit),0)").
+			Row().Scan(&supplyCostPerService)
+		sp.SupplyCost = supplyCostPerService * float64(sp.TurnCount)
+
+		// 3. Labor cost: avg time per turn (estimated_time_minutes) * avg hourly rate of assigned employees / 60
+		var avgMinutes float64
+		h.DB.TT(uc.ClientID, "turns").
+			Joins("JOIN turn_services ON turn_services.turn_id = turns.id AND turn_services.client_id = turns.client_id").
+			Where("turn_services.wash_service_id = ? AND turns.status = ? AND turns.created_at >= ? AND turns.created_at <= ?",
+				svc.ID, "DELIVERED", from, to).
+			Select("COALESCE(AVG(turns.estimated_minutes),0)").Row().Scan(&avgMinutes)
+		if avgMinutes == 0 {
+			avgMinutes = float64(svc.EstimatedTimeMinutes)
+		}
+
+		var avgHourlyRate float64
+		h.DB.TT(uc.ClientID, "employees").
+			Where("role = ? AND status = ?", "lavador", "activo").
+			Select("COALESCE(AVG(base_salary / 240),0)").Row().Scan(&avgHourlyRate) // 240 = 30 days * 8 hours
+		sp.LaborCost = math.Round((avgMinutes/60.0)*avgHourlyRate*float64(sp.TurnCount)*100) / 100
+
+		// 4. Margin
+		sp.Margin = math.Round((sp.Revenue-sp.SupplyCost-sp.LaborCost)*100) / 100
+
+		// 5. Margin %
+		if sp.Revenue > 0 {
+			sp.MarginPct = math.Round(sp.Margin/sp.Revenue*10000) / 100
+		}
+
+		results = append(results, sp)
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"from":          from,
+		"to":            to,
+		"profitability": results,
 	})
 }
 

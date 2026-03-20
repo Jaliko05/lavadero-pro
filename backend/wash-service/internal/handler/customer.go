@@ -10,10 +10,13 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-type CustomerHandler struct{ DB *repository.DBAdapter }
+type CustomerHandler struct {
+	DB       *repository.DBAdapter
+	Notifier *NotificationHelper
+}
 
-func NewCustomerHandler(db *repository.DBAdapter) *CustomerHandler {
-	return &CustomerHandler{DB: db}
+func NewCustomerHandler(db *repository.DBAdapter, notifier *NotificationHelper) *CustomerHandler {
+	return &CustomerHandler{DB: db, Notifier: notifier}
 }
 
 // --- Search (authenticated, non-admin) ---
@@ -137,6 +140,11 @@ func (h *CustomerHandler) Create(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, dto.ErrorResponse{Error: "error creating customer"})
 		return
 	}
+
+	if h.Notifier != nil {
+		go h.Notifier.SendWelcomeCustomer(uc.ClientID, customer.ID)
+	}
+
 	c.JSON(http.StatusCreated, customer)
 }
 

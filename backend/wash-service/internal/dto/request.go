@@ -168,6 +168,9 @@ type CreateEmployeeRequest struct {
 	ContractType     string  `json:"contract_type"`
 	Role             string  `json:"role"`
 	BaseSalary       float64 `json:"base_salary"`
+	PaymentType      string  `json:"payment_type"`
+	AmountPerWash    float64 `json:"amount_per_wash"`
+	PercentageRate   float64 `json:"percentage_rate"`
 	PayFrequency     string  `json:"pay_frequency"`
 	BankName         string  `json:"bank_name"`
 	BankAccount      string  `json:"bank_account"`
@@ -189,6 +192,9 @@ type UpdateEmployeeRequest struct {
 	ContractType     *string  `json:"contract_type"`
 	Role             *string  `json:"role"`
 	BaseSalary       *float64 `json:"base_salary"`
+	PaymentType      *string  `json:"payment_type"`
+	AmountPerWash    *float64 `json:"amount_per_wash"`
+	PercentageRate   *float64 `json:"percentage_rate"`
 	PayFrequency     *string  `json:"pay_frequency"`
 	BankName         *string  `json:"bank_name"`
 	BankAccount      *string  `json:"bank_account"`

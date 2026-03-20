@@ -10,6 +10,9 @@ import { formatCurrency } from '@/lib/utils';
 import { DollarSign, TrendingUp, ArrowUpRight, ArrowDownRight, Plus, Edit2, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import DateRangePicker from '@/components/shared/DateRangePicker';
+import {
+  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, Line, ComposedChart,
+} from 'recharts';
 
 const PAYMENT_METHODS = [
   { value: 'efectivo', label: 'Efectivo' },
@@ -68,7 +71,7 @@ export default function Finance() {
   async function loadAll() {
     try {
       const [cf, pl, inc, exp, rec, ar] = await Promise.allSettled([
-        getCashFlow({ from: dateRange.from, to: dateRange.to }),
+        getCashFlow({ from: dateRange.from, to: dateRange.to, projection_days: 14 }),
         getProfitLoss({ from: dateRange.from, to: dateRange.to }),
         listIncomes(),
         listExpenses(),
@@ -88,13 +91,40 @@ export default function Finance() {
   async function loadOverview() {
     try {
       const [cf, pl] = await Promise.allSettled([
-        getCashFlow({ from: dateRange.from, to: dateRange.to }),
+        getCashFlow({ from: dateRange.from, to: dateRange.to, projection_days: 14 }),
         getProfitLoss({ from: dateRange.from, to: dateRange.to }),
       ]);
       if (cf.status === 'fulfilled') setCashFlow(cf.value.data);
       if (pl.status === 'fulfilled') setProfitLoss(pl.value.data);
     } catch (e) { console.error(e); }
   }
+
+  // Build chart data combining actual daily + projection
+  const chartData = (() => {
+    if (!cashFlow) return [];
+    const data = [];
+    if (cashFlow.daily) {
+      for (const d of cashFlow.daily) {
+        data.push({
+          date: d.date,
+          income: d.income,
+          expenses: d.expenses,
+          net: d.net,
+        });
+      }
+    }
+    if (cashFlow.projection) {
+      for (const p of cashFlow.projection) {
+        data.push({
+          date: p.date,
+          projected_income: p.projected_income,
+          projected_expenses: p.projected_expenses,
+          projected_net: p.projected_net,
+        });
+      }
+    }
+    return data;
+  })();
 
   function handleDateChange(range) {
     setDateRange(range);
@@ -250,6 +280,33 @@ export default function Finance() {
                   <Row label="Utilidad" value={formatCurrency(profitLoss.profit)} positive={profitLoss.profit > 0} bold />
                 </div>
               </div>
+            </div>
+          )}
+
+          {/* Cash Flow Chart */}
+          {chartData.length > 0 && (
+            <div className="bg-white rounded-lg border p-6">
+              <h2 className="font-semibold mb-4">Flujo de Caja</h2>
+              <ResponsiveContainer width="100%" height={350}>
+                <ComposedChart data={chartData} margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                  <XAxis dataKey="date" tick={{ fontSize: 11 }} tickFormatter={(v) => { const d = new Date(v + 'T12:00:00'); return d.toLocaleDateString('es-CO', { day: '2-digit', month: 'short' }); }} />
+                  <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => v >= 1000000 ? `${(v / 1000000).toFixed(1)}M` : v >= 1000 ? `${(v / 1000).toFixed(0)}K` : v} />
+                  <Tooltip
+                    formatter={(value, name) => [formatCurrency(value), name]}
+                    labelFormatter={(label) => new Date(label + 'T12:00:00').toLocaleDateString('es-CO', { weekday: 'short', day: '2-digit', month: 'short' })}
+                  />
+                  <Legend />
+                  {/* Actual data */}
+                  <Area type="monotone" dataKey="income" name="Ingresos" stroke="#16a34a" fill="#bbf7d0" fillOpacity={0.6} strokeWidth={2} />
+                  <Area type="monotone" dataKey="expenses" name="Gastos" stroke="#dc2626" fill="#fecaca" fillOpacity={0.6} strokeWidth={2} />
+                  <Line type="monotone" dataKey="net" name="Neto" stroke="#2563eb" strokeWidth={2} strokeDasharray="5 5" dot={false} />
+                  {/* Projected data */}
+                  <Area type="monotone" dataKey="projected_income" name="Ingreso Proyectado" stroke="#16a34a" fill="#bbf7d0" fillOpacity={0.3} strokeWidth={1.5} strokeDasharray="4 4" />
+                  <Area type="monotone" dataKey="projected_expenses" name="Gasto Proyectado" stroke="#dc2626" fill="#fecaca" fillOpacity={0.3} strokeWidth={1.5} strokeDasharray="4 4" />
+                  <Line type="monotone" dataKey="projected_net" name="Neto Proyectado" stroke="#2563eb" strokeWidth={1.5} strokeDasharray="2 6" dot={false} />
+                </ComposedChart>
+              </ResponsiveContainer>
             </div>
           )}
         </div>

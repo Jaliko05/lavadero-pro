@@ -9,6 +9,7 @@ import WasherLayout from '@/components/shared/WasherLayout';
 
 // Pages
 import Login from '@/pages/Login';
+import GoogleCallback from '@/pages/GoogleCallback';
 import Dashboard from '@/pages/Dashboard';
 import Board from '@/pages/Board';
 import Reception from '@/pages/Reception';
@@ -37,6 +38,7 @@ export default function App() {
           {/* Public routes */}
           <Route element={<PublicLayout />}>
             <Route path="/login" element={<Login />} />
+            <Route path="/auth/callback" element={<GoogleCallback />} />
             <Route path="/display/:clientId" element={<Display />} />
             <Route path="/turn-status/:turnId" element={<TurnStatus />} />
           </Route>
