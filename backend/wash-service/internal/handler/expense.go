@@ -1,0 +1,267 @@
+package handler
+
+import (
+	"net/http"
+	"time"
+
+	"github.com/falcore/wash-service/internal/domain"
+	"github.com/falcore/wash-service/internal/dto"
+	"github.com/falcore/wash-service/internal/middleware"
+	"github.com/falcore/wash-service/internal/repository"
+	"github.com/gin-gonic/gin"
+)
+
+type ExpenseHandler struct{ DB *repository.DBAdapter }
+
+func NewExpenseHandler(db *repository.DBAdapter) *ExpenseHandler {
+	return &ExpenseHandler{DB: db}
+}
+
+// --- Expenses ---
+
+func (h *ExpenseHandler) ListExpenses(c *gin.Context) {
+	uc := middleware.GetUserContext(c)
+	var expenses []domain.Expense
+	q := h.DB.TT(uc.ClientID, "expenses")
+	if cat := c.Query("category"); cat != "" {
+		q = q.Where("category = ?", cat)
+	}
+	if from := c.Query("from"); from != "" {
+		q = q.Where("date >= ?", from)
+	}
+	if to := c.Query("to"); to != "" {
+		q = q.Where("date <= ?", to)
+	}
+	if err := q.Order("date DESC").Find(&expenses).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, dto.ErrorResponse{Error: "error loading expenses"})
+		return
+	}
+	c.JSON(http.StatusOK, expenses)
+}
+
+func (h *ExpenseHandler) CreateExpense(c *gin.Context) {
+	uc := middleware.GetUserContext(c)
+	var req struct {
+		Category      string  `json:"category" binding:"required"`
+		Description   string  `json:"description" binding:"required"`
+		Amount        float64 `json:"amount" binding:"required"`
+		PaymentMethod string  `json:"payment_method" binding:"required"`
+		SupplierID    *string `json:"supplier_id"`
+		ReceiptURL    *string `json:"receipt_url"`
+		Date          string  `json:"date" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, dto.ErrorResponse{Error: err.Error()})
+		return
+	}
+	date, _ := time.Parse("2006-01-02", req.Date)
+	var receiptURL string
+	if req.ReceiptURL != nil {
+		receiptURL = *req.ReceiptURL
+	}
+	exp := domain.Expense{
+		ClientID:      uc.ClientID,
+		Category:      req.Category,
+		Description:   req.Description,
+		Amount:        req.Amount,
+		PaymentMethod: req.PaymentMethod,
+		SupplierID:    req.SupplierID,
+		ReceiptURL:    receiptURL,
+		RegisteredBy:  uc.UserID,
+		Date:          date,
+	}
+	if err := h.DB.TT(uc.ClientID, "expenses").Create(&exp).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, dto.ErrorResponse{Error: "error creating expense"})
+		return
+	}
+	c.JSON(http.StatusCreated, exp)
+}
+
+func (h *ExpenseHandler) UpdateExpense(c *gin.Context) {
+	uc := middleware.GetUserContext(c)
+	var req struct {
+		Category      *string  `json:"category"`
+		Description   *string  `json:"description"`
+		Amount        *float64 `json:"amount"`
+		PaymentMethod *string  `json:"payment_method"`
+		SupplierID    *string  `json:"supplier_id"`
+		ReceiptURL    *string  `json:"receipt_url"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, dto.ErrorResponse{Error: err.Error()})
+		return
+	}
+	updates := make(map[string]interface{})
+	if req.Category != nil { updates["category"] = *req.Category }
+	if req.Description != nil { updates["description"] = *req.Description }
+	if req.Amount != nil { updates["amount"] = *req.Amount }
+	if req.PaymentMethod != nil { updates["payment_method"] = *req.PaymentMethod }
+	if req.SupplierID != nil { updates["supplier_id"] = *req.SupplierID }
+	if req.ReceiptURL != nil { updates["receipt_url"] = *req.ReceiptURL }
+	result := h.DB.TT(uc.ClientID, "expenses").Where("id = ?", c.Param("id")).Updates(updates)
+	if result.Error != nil || result.RowsAffected == 0 {
+		c.JSON(http.StatusNotFound, dto.ErrorResponse{Error: "expense not found"})
+		return
+	}
+	c.JSON(http.StatusOK, dto.MessageResponse{Message: "expense updated"})
+}
+
+func (h *ExpenseHandler) DeleteExpense(c *gin.Context) {
+	uc := middleware.GetUserContext(c)
+	result := h.DB.TT(uc.ClientID, "expenses").Where("id = ?", c.Param("id")).Delete(&domain.Expense{})
+	if result.Error != nil || result.RowsAffected == 0 {
+		c.JSON(http.StatusNotFound, dto.ErrorResponse{Error: "expense not found"})
+		return
+	}
+	c.JSON(http.StatusOK, dto.MessageResponse{Message: "expense deleted"})
+}
+
+// --- Recurring Expenses ---
+
+func (h *ExpenseHandler) ListRecurring(c *gin.Context) {
+	uc := middleware.GetUserContext(c)
+	var items []domain.RecurringExpense
+	if err := h.DB.TT(uc.ClientID, "recurring_expenses").Order("name ASC").Find(&items).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, dto.ErrorResponse{Error: "error loading recurring expenses"})
+		return
+	}
+	c.JSON(http.StatusOK, items)
+}
+
+func (h *ExpenseHandler) CreateRecurring(c *gin.Context) {
+	uc := middleware.GetUserContext(c)
+	var req struct {
+		Name      string  `json:"name" binding:"required"`
+		Category  string  `json:"category" binding:"required"`
+		Amount    float64 `json:"amount" binding:"required"`
+		Frequency string  `json:"frequency" binding:"required"`
+		DueDay    int     `json:"due_day" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, dto.ErrorResponse{Error: err.Error()})
+		return
+	}
+	re := domain.RecurringExpense{
+		ClientID:  uc.ClientID,
+		Name:      req.Name,
+		Category:  req.Category,
+		Amount:    req.Amount,
+		Frequency: req.Frequency,
+		DueDay:    req.DueDay,
+		Active:    true,
+	}
+	if err := h.DB.TT(uc.ClientID, "recurring_expenses").Create(&re).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, dto.ErrorResponse{Error: "error creating recurring expense"})
+		return
+	}
+	c.JSON(http.StatusCreated, re)
+}
+
+func (h *ExpenseHandler) UpdateRecurring(c *gin.Context) {
+	uc := middleware.GetUserContext(c)
+	var req struct {
+		Name      *string  `json:"name"`
+		Category  *string  `json:"category"`
+		Amount    *float64 `json:"amount"`
+		Frequency *string  `json:"frequency"`
+		DueDay    *int     `json:"due_day"`
+		Active    *bool    `json:"active"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, dto.ErrorResponse{Error: err.Error()})
+		return
+	}
+	updates := make(map[string]interface{})
+	if req.Name != nil { updates["name"] = *req.Name }
+	if req.Category != nil { updates["category"] = *req.Category }
+	if req.Amount != nil { updates["amount"] = *req.Amount }
+	if req.Frequency != nil { updates["frequency"] = *req.Frequency }
+	if req.DueDay != nil { updates["due_day"] = *req.DueDay }
+	if req.Active != nil { updates["active"] = *req.Active }
+	result := h.DB.TT(uc.ClientID, "recurring_expenses").Where("id = ?", c.Param("id")).Updates(updates)
+	if result.Error != nil || result.RowsAffected == 0 {
+		c.JSON(http.StatusNotFound, dto.ErrorResponse{Error: "recurring expense not found"})
+		return
+	}
+	c.JSON(http.StatusOK, dto.MessageResponse{Message: "recurring expense updated"})
+}
+
+func (h *ExpenseHandler) DeleteRecurring(c *gin.Context) {
+	uc := middleware.GetUserContext(c)
+	result := h.DB.TT(uc.ClientID, "recurring_expenses").Where("id = ?", c.Param("id")).Delete(&domain.RecurringExpense{})
+	if result.Error != nil || result.RowsAffected == 0 {
+		c.JSON(http.StatusNotFound, dto.ErrorResponse{Error: "recurring expense not found"})
+		return
+	}
+	c.JSON(http.StatusOK, dto.MessageResponse{Message: "recurring expense deleted"})
+}
+
+// --- Accounts Receivable ---
+
+func (h *ExpenseHandler) ListAccountsReceivable(c *gin.Context) {
+	uc := middleware.GetUserContext(c)
+	var items []domain.AccountReceivable
+	q := h.DB.TT(uc.ClientID, "account_receivables")
+	if status := c.Query("status"); status != "" {
+		q = q.Where("status = ?", status)
+	}
+	if err := q.Order("due_date ASC").Find(&items).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, dto.ErrorResponse{Error: "error loading accounts receivable"})
+		return
+	}
+	c.JSON(http.StatusOK, items)
+}
+
+// --- Cash Flow ---
+
+func (h *ExpenseHandler) CashFlow(c *gin.Context) {
+	uc := middleware.GetUserContext(c)
+	from := c.DefaultQuery("from", time.Now().AddDate(0, -1, 0).Format("2006-01-02"))
+	to := c.DefaultQuery("to", time.Now().Format("2006-01-02"))
+
+	var totalIncome, totalExpense float64
+	h.DB.TT(uc.ClientID, "incomes").Where("date >= ? AND date <= ?", from, to).Select("COALESCE(SUM(amount),0)").Row().Scan(&totalIncome)
+	h.DB.TT(uc.ClientID, "expenses").Where("date >= ? AND date <= ?", from, to).Select("COALESCE(SUM(amount),0)").Row().Scan(&totalExpense)
+
+	c.JSON(http.StatusOK, gin.H{
+		"from":          from,
+		"to":            to,
+		"total_income":  totalIncome,
+		"total_expense": totalExpense,
+		"net":           totalIncome - totalExpense,
+	})
+}
+
+// --- Profit & Loss ---
+
+func (h *ExpenseHandler) ProfitLoss(c *gin.Context) {
+	uc := middleware.GetUserContext(c)
+	from := c.DefaultQuery("from", time.Now().AddDate(0, -1, 0).Format("2006-01-02"))
+	to := c.DefaultQuery("to", time.Now().Format("2006-01-02"))
+
+	var totalIncome, totalExpense float64
+	h.DB.TT(uc.ClientID, "incomes").Where("date >= ? AND date <= ?", from, to).Select("COALESCE(SUM(amount),0)").Row().Scan(&totalIncome)
+	h.DB.TT(uc.ClientID, "expenses").Where("date >= ? AND date <= ?", from, to).Select("COALESCE(SUM(amount),0)").Row().Scan(&totalExpense)
+
+	// Payroll costs
+	var payrollCost float64
+	h.DB.TT(uc.ClientID, "payrolls").Where("period_start >= ? AND period_end <= ? AND status = ?", from, to, "approved").Select("COALESCE(SUM(total_net),0)").Row().Scan(&payrollCost)
+
+	totalCosts := totalExpense + payrollCost
+
+	c.JSON(http.StatusOK, gin.H{
+		"from":           from,
+		"to":             to,
+		"revenue":        totalIncome,
+		"expenses":       totalExpense,
+		"payroll":        payrollCost,
+		"total_costs":    totalCosts,
+		"profit":         totalIncome - totalCosts,
+		"profit_margin":  safeDiv(totalIncome-totalCosts, totalIncome) * 100,
+	})
+}
+
+func safeDiv(a, b float64) float64 {
+	if b == 0 { return 0 }
+	return a / b
+}

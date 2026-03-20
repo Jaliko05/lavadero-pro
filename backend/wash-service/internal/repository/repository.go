@@ -116,3 +116,8 @@ func (d *DBAdapter) TT(clientID, table string) *gorm.DB {
 func (d *DBAdapter) TTUser(clientID, userID, table string) *gorm.DB {
 	return d.TT(clientID, table).Where("user_id = ?", userID)
 }
+
+// RawExpr returns a gorm.Expr for raw SQL expressions (e.g. "stock - ?").
+func RawExpr(expr string, args ...interface{}) interface{} {
+	return gorm.Expr(expr, args...)
+}
