@@ -7,7 +7,10 @@ export const updateTurnStatus = (id, data) => apiClient.patch(`/v1/wash/turns/${
 export const assignTurn = (id, data) => apiClient.patch(`/v1/wash/turns/${id}/assign`, data);
 export const addTurnService = (id, data) => apiClient.post(`/v1/wash/turns/${id}/services`, data);
 export const getTurnPhotos = (id) => apiClient.get(`/v1/wash/turns/${id}/photos`);
-export const getTurnStatusHistory = (id) => apiClient.get(`/v1/wash/turns/${id}/status-history`);
+export const createTurnPhoto = (id, data) => apiClient.post(`/v1/wash/turns/${id}/photos`, data);
+export const deleteTurnPhoto = (turnId, photoId) => apiClient.delete(`/v1/wash/turns/${turnId}/photos/${photoId}`);
+export const getTurnServices = (id) => apiClient.get(`/v1/wash/turns/${id}/services`);
+export const getTurnStatusHistory = (id) => apiClient.get(`/v1/wash/turns/${id}/history`);
 
 // Employee's own turns
 export const getMyTurns = (params) => apiClient.get('/v1/wash/my/turns', { params });

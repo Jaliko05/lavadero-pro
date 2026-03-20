@@ -7,3 +7,7 @@ export const getPerformanceReport = (params) => apiClient.get('/v1/wash/admin/re
 export const getPayrollReport = (params) => apiClient.get('/v1/wash/admin/reports/payroll', { params });
 export const getClientsReport = (params) => apiClient.get('/v1/wash/admin/reports/clients', { params });
 export const getInventoryReport = (params) => apiClient.get('/v1/wash/admin/reports/inventory', { params });
+export const getInventoryMovementsReport = (params) => apiClient.get('/v1/wash/admin/reports/inventory-movements', { params });
+
+// CSV Export
+export const exportCSV = (type, params) => apiClient.get(`/v1/wash/admin/reports/${type}/csv`, { params, responseType: 'blob' });

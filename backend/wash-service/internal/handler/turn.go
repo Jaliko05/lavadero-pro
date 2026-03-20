@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"fmt"
+	"math"
 	"net/http"
 	"strconv"
 	"time"
@@ -10,6 +12,7 @@ import (
 	"github.com/falcore/wash-service/internal/middleware"
 	"github.com/falcore/wash-service/internal/repository"
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 type TurnHandler struct {
@@ -164,6 +167,16 @@ func (h *TurnHandler) UpdateStatus(c *gin.Context) {
 		Reason:     req.Reason,
 	})
 
+	// Auto-deduct supplies when turn is completed (DONE)
+	if req.Status == "DONE" {
+		h.autoDeductSupplies(uc.ClientID, turnID)
+	}
+
+	// Auto-accumulate loyalty points when turn is delivered
+	if req.Status == "DELIVERED" {
+		h.autoAccumulateLoyalty(uc.ClientID, turnID)
+	}
+
 	c.JSON(http.StatusOK, dto.MessageResponse{Message: "status updated to " + req.Status})
 }
 
@@ -308,4 +321,138 @@ func isValidTransition(from, to string) bool {
 		}
 	}
 	return false
+}
+
+// autoDeductSupplies deducts supply stock based on SupplyConsumption rules for each service in the turn.
+func (h *TurnHandler) autoDeductSupplies(clientID, turnID string) {
+	var turnServices []domain.TurnService
+	h.DB.TT(clientID, "turn_services").Where("turn_id = ?", turnID).Find(&turnServices)
+
+	now := time.Now()
+	for _, ts := range turnServices {
+		var consumptions []domain.SupplyConsumption
+		h.DB.TT(clientID, "supply_consumptions").Where("wash_service_id = ?", ts.WashServiceID).Find(&consumptions)
+
+		for _, sc := range consumptions {
+			// Decrement stock
+			h.DB.TT(clientID, "wash_supplies").
+				Where("id = ?", sc.WashSupplyID).
+				UpdateColumn("stock", gorm.Expr("stock - ?", sc.QuantityPerService))
+
+			// Get new balance
+			var newStock float64
+			h.DB.TT(clientID, "wash_supplies").Where("id = ?", sc.WashSupplyID).Select("stock").Scan(&newStock)
+
+			// Record inventory movement
+			h.DB.TT(clientID, "inventory_movements").Create(&domain.InventoryMovement{
+				ClientID:     clientID,
+				ItemType:     "supply",
+				ItemID:       sc.WashSupplyID,
+				MovementType: "consumption",
+				Quantity:     -sc.QuantityPerService,
+				BalanceAfter: newStock,
+				Reference:    fmt.Sprintf("turn:%s service:%s", turnID, ts.WashServiceID),
+				Date:         now,
+			})
+		}
+	}
+}
+
+// autoAccumulateLoyalty awards loyalty points to the customer when a turn is delivered.
+func (h *TurnHandler) autoAccumulateLoyalty(clientID, turnID string) {
+	var turn domain.Turn
+	if err := h.DB.TT(clientID, "turns").Where("id = ?", turnID).First(&turn).Error; err != nil {
+		return
+	}
+	if turn.CustomerID == nil || turn.TotalPrice <= 0 {
+		return
+	}
+
+	var config domain.LoyaltyConfig
+	if err := h.DB.TT(clientID, "loyalty_configs").First(&config).Error; err != nil {
+		return
+	}
+	if config.PointsPerAmount <= 0 {
+		return
+	}
+
+	points := int(math.Floor(turn.TotalPrice / config.PointsPerAmount))
+	if points <= 0 {
+		return
+	}
+
+	// Create loyalty transaction
+	h.DB.TT(clientID, "loyalty_transactions").Create(&domain.LoyaltyTransaction{
+		CustomerID:  *turn.CustomerID,
+		ClientID:    clientID,
+		Type:        "earn",
+		Points:      points,
+		Reference:   turnID,
+		Description: fmt.Sprintf("Puntos por turno #%d - $%.0f", turn.DailyNumber, turn.TotalPrice),
+	})
+}
+
+// --- Turn Photos ---
+
+func (h *TurnHandler) ListPhotos(c *gin.Context) {
+	uc := middleware.GetUserContext(c)
+	var photos []domain.TurnPhoto
+	if err := h.DB.TT(uc.ClientID, "turn_photos").
+		Where("turn_id = ?", c.Param("id")).
+		Order("created_at ASC").
+		Find(&photos).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, dto.ErrorResponse{Error: "error loading photos"})
+		return
+	}
+	c.JSON(http.StatusOK, photos)
+}
+
+func (h *TurnHandler) CreatePhoto(c *gin.Context) {
+	uc := middleware.GetUserContext(c)
+	var req struct {
+		PhotoURL  string `json:"photo_url" binding:"required"`
+		PhotoType string `json:"photo_type"` // entry, exit
+		Angle     string `json:"angle"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, dto.ErrorResponse{Error: err.Error()})
+		return
+	}
+
+	photo := domain.TurnPhoto{
+		TurnID:    c.Param("id"),
+		PhotoURL:  req.PhotoURL,
+		PhotoType: req.PhotoType,
+		Angle:     req.Angle,
+	}
+	if err := h.DB.TT(uc.ClientID, "turn_photos").Create(&photo).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, dto.ErrorResponse{Error: "error saving photo"})
+		return
+	}
+	c.JSON(http.StatusCreated, photo)
+}
+
+func (h *TurnHandler) DeletePhoto(c *gin.Context) {
+	uc := middleware.GetUserContext(c)
+	result := h.DB.TT(uc.ClientID, "turn_photos").
+		Where("id = ? AND turn_id = ?", c.Param("photo_id"), c.Param("id")).
+		Delete(&domain.TurnPhoto{})
+	if result.Error != nil || result.RowsAffected == 0 {
+		c.JSON(http.StatusNotFound, dto.ErrorResponse{Error: "photo not found"})
+		return
+	}
+	c.JSON(http.StatusOK, dto.MessageResponse{Message: "photo deleted"})
+}
+
+// ListTurnServices returns services attached to a turn.
+func (h *TurnHandler) ListTurnServices(c *gin.Context) {
+	uc := middleware.GetUserContext(c)
+	var services []domain.TurnService
+	if err := h.DB.TT(uc.ClientID, "turn_services").
+		Where("turn_id = ?", c.Param("id")).
+		Find(&services).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, dto.ErrorResponse{Error: "error loading turn services"})
+		return
+	}
+	c.JSON(http.StatusOK, services)
 }

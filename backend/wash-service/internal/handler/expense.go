@@ -196,6 +196,102 @@ func (h *ExpenseHandler) DeleteRecurring(c *gin.Context) {
 	c.JSON(http.StatusOK, dto.MessageResponse{Message: "recurring expense deleted"})
 }
 
+// --- Incomes ---
+
+func (h *ExpenseHandler) ListIncomes(c *gin.Context) {
+	uc := middleware.GetUserContext(c)
+	var incomes []domain.Income
+	q := h.DB.TT(uc.ClientID, "incomes")
+	if cat := c.Query("category"); cat != "" {
+		q = q.Where("category = ?", cat)
+	}
+	if from := c.Query("from"); from != "" {
+		q = q.Where("date >= ?", from)
+	}
+	if to := c.Query("to"); to != "" {
+		q = q.Where("date <= ?", to)
+	}
+	if src := c.Query("source_type"); src != "" {
+		q = q.Where("source_type = ?", src)
+	}
+	if err := q.Order("date DESC").Find(&incomes).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, dto.ErrorResponse{Error: "error loading incomes"})
+		return
+	}
+	c.JSON(http.StatusOK, incomes)
+}
+
+func (h *ExpenseHandler) CreateIncome(c *gin.Context) {
+	uc := middleware.GetUserContext(c)
+	var req struct {
+		Category      string  `json:"category"`
+		Description   string  `json:"description" binding:"required"`
+		Amount        float64 `json:"amount" binding:"required"`
+		PaymentMethod string  `json:"payment_method" binding:"required"`
+		Date          string  `json:"date" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, dto.ErrorResponse{Error: err.Error()})
+		return
+	}
+	date, _ := time.Parse("2006-01-02", req.Date)
+	income := domain.Income{
+		ClientID:      uc.ClientID,
+		Category:      req.Category,
+		Description:   req.Description,
+		Amount:        req.Amount,
+		PaymentMethod: req.PaymentMethod,
+		SourceType:    "manual",
+		RegisteredBy:  uc.UserID,
+		Date:          date,
+	}
+	if err := h.DB.TT(uc.ClientID, "incomes").Create(&income).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, dto.ErrorResponse{Error: "error creating income"})
+		return
+	}
+	c.JSON(http.StatusCreated, income)
+}
+
+func (h *ExpenseHandler) UpdateIncome(c *gin.Context) {
+	uc := middleware.GetUserContext(c)
+	var req struct {
+		Category      *string  `json:"category"`
+		Description   *string  `json:"description"`
+		Amount        *float64 `json:"amount"`
+		PaymentMethod *string  `json:"payment_method"`
+		Date          *string  `json:"date"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, dto.ErrorResponse{Error: err.Error()})
+		return
+	}
+	updates := make(map[string]interface{})
+	if req.Category != nil { updates["category"] = *req.Category }
+	if req.Description != nil { updates["description"] = *req.Description }
+	if req.Amount != nil { updates["amount"] = *req.Amount }
+	if req.PaymentMethod != nil { updates["payment_method"] = *req.PaymentMethod }
+	if req.Date != nil {
+		d, _ := time.Parse("2006-01-02", *req.Date)
+		updates["date"] = d
+	}
+	result := h.DB.TT(uc.ClientID, "incomes").Where("id = ?", c.Param("id")).Updates(updates)
+	if result.Error != nil || result.RowsAffected == 0 {
+		c.JSON(http.StatusNotFound, dto.ErrorResponse{Error: "income not found"})
+		return
+	}
+	c.JSON(http.StatusOK, dto.MessageResponse{Message: "income updated"})
+}
+
+func (h *ExpenseHandler) DeleteIncome(c *gin.Context) {
+	uc := middleware.GetUserContext(c)
+	result := h.DB.TT(uc.ClientID, "incomes").Where("id = ?", c.Param("id")).Delete(&domain.Income{})
+	if result.Error != nil || result.RowsAffected == 0 {
+		c.JSON(http.StatusNotFound, dto.ErrorResponse{Error: "income not found"})
+		return
+	}
+	c.JSON(http.StatusOK, dto.MessageResponse{Message: "income deleted"})
+}
+
 // --- Accounts Receivable ---
 
 func (h *ExpenseHandler) ListAccountsReceivable(c *gin.Context) {
@@ -210,6 +306,84 @@ func (h *ExpenseHandler) ListAccountsReceivable(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, items)
+}
+
+func (h *ExpenseHandler) CreateAccountReceivable(c *gin.Context) {
+	uc := middleware.GetUserContext(c)
+	var req struct {
+		CustomerID  string  `json:"customer_id" binding:"required"`
+		SaleID      *string `json:"sale_id"`
+		TotalAmount float64 `json:"total_amount" binding:"required"`
+		DueDate     *string `json:"due_date"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, dto.ErrorResponse{Error: err.Error()})
+		return
+	}
+	ar := domain.AccountReceivable{
+		ClientID:    uc.ClientID,
+		CustomerID:  req.CustomerID,
+		SaleID:      req.SaleID,
+		TotalAmount: req.TotalAmount,
+		Status:      "al_dia",
+	}
+	if req.DueDate != nil {
+		d, _ := time.Parse("2006-01-02", *req.DueDate)
+		ar.DueDate = &d
+	}
+	if err := h.DB.TT(uc.ClientID, "account_receivables").Create(&ar).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, dto.ErrorResponse{Error: "error creating account receivable"})
+		return
+	}
+	c.JSON(http.StatusCreated, ar)
+}
+
+func (h *ExpenseHandler) PayAccountReceivable(c *gin.Context) {
+	uc := middleware.GetUserContext(c)
+	var req struct {
+		Amount        float64 `json:"amount" binding:"required,gt=0"`
+		PaymentMethod string  `json:"payment_method" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, dto.ErrorResponse{Error: err.Error()})
+		return
+	}
+
+	arID := c.Param("id")
+	var ar domain.AccountReceivable
+	if err := h.DB.TT(uc.ClientID, "account_receivables").Where("id = ?", arID).First(&ar).Error; err != nil {
+		c.JSON(http.StatusNotFound, dto.ErrorResponse{Error: "account receivable not found"})
+		return
+	}
+
+	remaining := ar.TotalAmount - ar.PaidAmount
+	if req.Amount > remaining {
+		c.JSON(http.StatusBadRequest, dto.ErrorResponse{Error: "payment exceeds remaining balance"})
+		return
+	}
+
+	newPaid := ar.PaidAmount + req.Amount
+	updates := map[string]interface{}{"paid_amount": newPaid}
+	if newPaid >= ar.TotalAmount {
+		updates["status"] = "pagada"
+	}
+	h.DB.TT(uc.ClientID, "account_receivables").Where("id = ?", arID).Updates(updates)
+
+	// Create income record for the payment
+	income := domain.Income{
+		ClientID:      uc.ClientID,
+		Category:      "cuenta_por_cobrar",
+		Description:   "Pago cuenta por cobrar #" + arID[:8],
+		Amount:        req.Amount,
+		PaymentMethod: req.PaymentMethod,
+		SourceType:    "account_receivable",
+		SourceID:      &arID,
+		RegisteredBy:  uc.UserID,
+		Date:          time.Now(),
+	}
+	h.DB.TT(uc.ClientID, "incomes").Create(&income)
+
+	c.JSON(http.StatusOK, dto.MessageResponse{Message: "payment registered"})
 }
 
 // --- Cash Flow ---

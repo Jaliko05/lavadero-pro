@@ -1,11 +1,12 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { createTurn } from '@/api/turns';
 import { listPublicServices } from '@/api/services';
 import { listPublicCategories } from '@/api/vehicle-categories';
 import { searchCustomers } from '@/api/customers';
 import { formatCurrency, cn } from '@/lib/utils';
-import { Car, Search, Plus, Check } from 'lucide-react';
+import { Car, Search, Plus, Check, AlertTriangle } from 'lucide-react';
+import { toast } from 'sonner';
 
 export default function Reception() {
   const navigate = useNavigate();
@@ -18,6 +19,7 @@ export default function Reception() {
   const [customerId, setCustomerId] = useState(null);
   const [customerSearch, setCustomerSearch] = useState('');
   const [customerResults, setCustomerResults] = useState([]);
+  const [priority, setPriority] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -70,9 +72,11 @@ export default function Reception() {
         plate: plate.toUpperCase(),
         vehicle_category_id: selectedCategory,
         customer_id: customerId || undefined,
-        service_ids: selectedServices,
+        services: selectedServices,
         observations,
+        priority: priority ? 1 : 0,
       });
+      toast.success('Turno registrado exitosamente');
       navigate('/board');
     } catch (err) {
       setError(err.response?.data?.error || 'Error al crear turno');
@@ -203,6 +207,23 @@ export default function Reception() {
             ))}
           </div>
         </div>
+
+        {/* Priority */}
+        <label className="flex items-center gap-3 p-3 rounded-lg border-2 border-slate-200 hover:border-amber-400 cursor-pointer transition-colors">
+          <input
+            type="checkbox"
+            checked={priority}
+            onChange={e => setPriority(e.target.checked)}
+            className="w-5 h-5 rounded border-slate-300 text-amber-500 focus:ring-amber-500"
+          />
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="w-5 h-5 text-amber-500" />
+            <div>
+              <span className="font-medium text-sm">Turno Prioritario</span>
+              <p className="text-xs text-slate-500">Se atendera con prioridad sobre otros turnos</p>
+            </div>
+          </div>
+        </label>
 
         {/* Observations */}
         <div>

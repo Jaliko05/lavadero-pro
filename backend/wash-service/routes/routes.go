@@ -74,7 +74,11 @@ func SetupRoutes(r *gin.Engine, db *repository.DBAdapter, producer *messaging.Pr
 		auth.PATCH("/turns/:id/status", turnH.UpdateStatus)
 		auth.PATCH("/turns/:id/assign", turnH.Assign)
 		auth.POST("/turns/:id/services", turnH.AddService)
+		auth.GET("/turns/:id/services", turnH.ListTurnServices)
 		auth.GET("/turns/:id/history", turnH.GetStatusHistory)
+		auth.GET("/turns/:id/photos", turnH.ListPhotos)
+		auth.POST("/turns/:id/photos", turnH.CreatePhoto)
+		auth.DELETE("/turns/:id/photos/:photo_id", turnH.DeletePhoto)
 
 		// POS / Sales
 		auth.POST("/sales", saleH.Create)
@@ -194,9 +198,11 @@ func SetupRoutes(r *gin.Engine, db *repository.DBAdapter, producer *messaging.Pr
 		admin.PUT("/customer-vehicles/:id", customerH.UpdateVehicle)
 		admin.DELETE("/customer-vehicles/:id", customerH.DeleteVehicle)
 
-		// Loyalty Config
+		// Loyalty
 		admin.GET("/loyalty-config", loyaltyH.GetConfig)
 		admin.PUT("/loyalty-config", loyaltyH.UpdateConfig)
+		admin.POST("/loyalty/redeem", loyaltyH.Redeem)
+		admin.GET("/loyalty/customers/:customer_id/points", loyaltyH.GetCustomerPoints)
 
 		// Inventory
 		admin.GET("/inventory/alerts", inventoryH.Alerts)
@@ -214,6 +220,12 @@ func SetupRoutes(r *gin.Engine, db *repository.DBAdapter, producer *messaging.Pr
 		admin.GET("/purchase-orders/:id", purchaseOrderH.Get)
 		admin.DELETE("/purchase-orders/:id", purchaseOrderH.Delete)
 
+		// Incomes
+		admin.GET("/incomes", expenseH.ListIncomes)
+		admin.POST("/incomes", expenseH.CreateIncome)
+		admin.PUT("/incomes/:id", expenseH.UpdateIncome)
+		admin.DELETE("/incomes/:id", expenseH.DeleteIncome)
+
 		// Expenses
 		admin.GET("/expenses", expenseH.ListExpenses)
 		admin.POST("/expenses", expenseH.CreateExpense)
@@ -228,6 +240,8 @@ func SetupRoutes(r *gin.Engine, db *repository.DBAdapter, producer *messaging.Pr
 
 		// Accounts Receivable
 		admin.GET("/accounts-receivable", expenseH.ListAccountsReceivable)
+		admin.POST("/accounts-receivable", expenseH.CreateAccountReceivable)
+		admin.POST("/accounts-receivable/:id/pay", expenseH.PayAccountReceivable)
 
 		// Cash Flow & P&L
 		admin.GET("/cash-flow", expenseH.CashFlow)
@@ -247,6 +261,8 @@ func SetupRoutes(r *gin.Engine, db *repository.DBAdapter, producer *messaging.Pr
 		admin.GET("/reports/payroll", reportH.PayrollReport)
 		admin.GET("/reports/clients", reportH.Clients)
 		admin.GET("/reports/inventory", reportH.Inventory)
+		admin.GET("/reports/inventory-movements", reportH.InventoryMovements)
+		admin.GET("/reports/:type/csv", reportH.CSVExport)
 
 		// Config
 		admin.GET("/config", washConfigH.GetConfig)

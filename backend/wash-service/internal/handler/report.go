@@ -1,9 +1,12 @@
 package handler
 
 import (
+	"encoding/csv"
+	"fmt"
 	"net/http"
 	"time"
 
+	"github.com/falcore/wash-service/internal/domain"
 	"github.com/falcore/wash-service/internal/dto"
 	"github.com/falcore/wash-service/internal/middleware"
 	"github.com/falcore/wash-service/internal/repository"
@@ -55,8 +58,16 @@ func (h *ReportHandler) Vehicles(c *gin.Context) {
 	uc := middleware.GetUserContext(c)
 	from, to := h.defaultRange(c)
 
+	baseQ := h.DB.TT(uc.ClientID, "turns").Where("created_at >= ? AND created_at <= ?", from, to)
+	if empID := c.Query("employee_id"); empID != "" {
+		baseQ = baseQ.Where("assigned_employee_id = ?", empID)
+	}
+	if catID := c.Query("category_id"); catID != "" {
+		baseQ = baseQ.Where("vehicle_category_id = ?", catID)
+	}
+
 	var turnsCount int64
-	h.DB.TT(uc.ClientID, "turns").Where("created_at >= ? AND created_at <= ?", from, to).Count(&turnsCount)
+	baseQ.Count(&turnsCount)
 
 	type CategoryCount struct {
 		VehicleCategoryID string `json:"vehicle_category_id"`
@@ -118,9 +129,12 @@ func (h *ReportHandler) Performance(c *gin.Context) {
 		AvgRating          float64 `json:"avg_rating"`
 	}
 	var records []EmpPerformance
-	h.DB.TT(uc.ClientID, "turns").
-		Where("created_at >= ? AND created_at <= ? AND status = ?", from, to, "DELIVERED").
-		Select("assigned_employee_id, COUNT(*) as turns_completed").
+	q := h.DB.TT(uc.ClientID, "turns").
+		Where("created_at >= ? AND created_at <= ? AND status = ?", from, to, "DELIVERED")
+	if empID := c.Query("employee_id"); empID != "" {
+		q = q.Where("assigned_employee_id = ?", empID)
+	}
+	q.Select("assigned_employee_id, COUNT(*) as turns_completed").
 		Group("assigned_employee_id").Scan(&records)
 
 	// Enrich with ratings
@@ -214,4 +228,110 @@ func (h *ReportHandler) Inventory(c *gin.Context) {
 		"products": products,
 		"supplies": supplies,
 	})
+}
+
+// InventoryMovements returns a list of inventory movements with optional filters.
+func (h *ReportHandler) InventoryMovements(c *gin.Context) {
+	uc := middleware.GetUserContext(c)
+	from, to := h.defaultRange(c)
+
+	var movements []domain.InventoryMovement
+	q := h.DB.TT(uc.ClientID, "inventory_movements").Where("date >= ? AND date <= ?", from, to)
+	if itemType := c.Query("item_type"); itemType != "" {
+		q = q.Where("item_type = ?", itemType)
+	}
+	if movType := c.Query("movement_type"); movType != "" {
+		q = q.Where("movement_type = ?", movType)
+	}
+	q.Order("created_at DESC").Find(&movements)
+
+	c.JSON(http.StatusOK, gin.H{
+		"from":      from,
+		"to":        to,
+		"movements": movements,
+	})
+}
+
+// CSVExport exports report data as CSV.
+func (h *ReportHandler) CSVExport(c *gin.Context) {
+	uc := middleware.GetUserContext(c)
+	from, to := h.defaultRange(c)
+	reportType := c.Param("type")
+
+	c.Header("Content-Type", "text/csv")
+	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%s_%s_%s.csv", reportType, from, to))
+
+	w := csv.NewWriter(c.Writer)
+	defer w.Flush()
+
+	switch reportType {
+	case "sales":
+		w.Write([]string{"ID", "Total", "Status", "Fecha"})
+		type SaleRow struct {
+			ID        string  `json:"id"`
+			Total     float64 `json:"total"`
+			Status    string  `json:"status"`
+			CreatedAt string  `json:"created_at"`
+		}
+		var rows []SaleRow
+		h.DB.TT(uc.ClientID, "sales").Where("created_at >= ? AND created_at <= ?", from, to).
+			Select("id, total, status, created_at").Order("created_at DESC").Scan(&rows)
+		for _, r := range rows {
+			w.Write([]string{r.ID, fmt.Sprintf("%.0f", r.Total), r.Status, r.CreatedAt})
+		}
+
+	case "vehicles":
+		w.Write([]string{"Turno ID", "Placa", "Categoría", "Estado", "Precio Total", "Fecha"})
+		type TurnRow struct {
+			ID                string  `json:"id"`
+			Plate             string  `json:"plate"`
+			VehicleCategoryID string  `json:"vehicle_category_id"`
+			Status            string  `json:"status"`
+			TotalPrice        float64 `json:"total_price"`
+			CreatedAt         string  `json:"created_at"`
+		}
+		var rows []TurnRow
+		h.DB.TT(uc.ClientID, "turns").Where("created_at >= ? AND created_at <= ?", from, to).
+			Select("id, plate, vehicle_category_id, status, total_price, created_at").Order("created_at DESC").Scan(&rows)
+		for _, r := range rows {
+			w.Write([]string{r.ID, r.Plate, r.VehicleCategoryID, r.Status, fmt.Sprintf("%.0f", r.TotalPrice), r.CreatedAt})
+		}
+
+	case "attendance":
+		w.Write([]string{"Empleado ID", "Fecha", "Estado", "Check In", "Check Out", "Minutos Tarde"})
+		type AttRow struct {
+			EmployeeID  string `json:"employee_id"`
+			Date        string `json:"date"`
+			Status      string `json:"status"`
+			CheckIn     string `json:"check_in"`
+			CheckOut    string `json:"check_out"`
+			LateMinutes int    `json:"late_minutes"`
+		}
+		var rows []AttRow
+		h.DB.TT(uc.ClientID, "employee_attendances").Where("date >= ? AND date <= ?", from, to).
+			Select("employee_id, date, status, check_in, check_out, late_minutes").Order("date DESC").Scan(&rows)
+		for _, r := range rows {
+			w.Write([]string{r.EmployeeID, r.Date, r.Status, r.CheckIn, r.CheckOut, fmt.Sprintf("%d", r.LateMinutes)})
+		}
+
+	case "expenses":
+		w.Write([]string{"ID", "Categoría", "Descripción", "Monto", "Método Pago", "Fecha"})
+		var rows []domain.Expense
+		h.DB.TT(uc.ClientID, "expenses").Where("date >= ? AND date <= ?", from, to).Order("date DESC").Find(&rows)
+		for _, r := range rows {
+			w.Write([]string{r.ID, r.Category, r.Description, fmt.Sprintf("%.0f", r.Amount), r.PaymentMethod, r.Date.Format("2006-01-02")})
+		}
+
+	case "incomes":
+		w.Write([]string{"ID", "Categoría", "Descripción", "Monto", "Método Pago", "Tipo", "Fecha"})
+		var rows []domain.Income
+		h.DB.TT(uc.ClientID, "incomes").Where("date >= ? AND date <= ?", from, to).Order("date DESC").Find(&rows)
+		for _, r := range rows {
+			w.Write([]string{r.ID, r.Category, r.Description, fmt.Sprintf("%.0f", r.Amount), r.PaymentMethod, r.SourceType, r.Date.Format("2006-01-02")})
+		}
+
+	default:
+		c.JSON(http.StatusBadRequest, dto.ErrorResponse{Error: "unsupported report type: " + reportType})
+		return
+	}
 }

@@ -18,6 +18,7 @@ import {
   Droplets,
   ClipboardList,
   UserCog,
+  FileText,
 } from 'lucide-react';
 
 const menuItems = [
@@ -29,6 +30,7 @@ const menuItems = [
   { icon: DollarSign, label: 'Finanzas', path: '/finance' },
   { icon: Package, label: 'Inventario', path: '/inventory' },
   { icon: Heart, label: 'Clientes', path: '/customers' },
+  { icon: FileText, label: 'Nomina', path: '/payroll' },
   { icon: BarChart3, label: 'Reportes', path: '/reports' },
   { icon: Settings, label: 'Configuracion', path: '/settings' },
 ];

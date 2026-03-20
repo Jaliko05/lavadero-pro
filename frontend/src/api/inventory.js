@@ -22,8 +22,9 @@ export const deleteSupplier = (id) => apiClient.delete(`/v1/wash/admin/suppliers
 export const listPurchaseOrders = (params) => apiClient.get('/v1/wash/admin/purchase-orders', { params });
 export const createPurchaseOrder = (data) => apiClient.post('/v1/wash/admin/purchase-orders', data);
 export const getPurchaseOrder = (id) => apiClient.get(`/v1/wash/admin/purchase-orders/${id}`);
-export const updatePurchaseOrder = (id, data) => apiClient.put(`/v1/wash/admin/purchase-orders/${id}`, data);
+export const deletePurchaseOrder = (id) => apiClient.delete(`/v1/wash/admin/purchase-orders/${id}`);
 
-// Inventory
+// Inventory Alerts & Movements
 export const getInventoryAlerts = () => apiClient.get('/v1/wash/admin/inventory/alerts');
+export const listInventoryMovements = (params) => apiClient.get('/v1/wash/admin/reports/inventory-movements', { params });
 export const submitInventoryCount = (data) => apiClient.post('/v1/wash/admin/inventory/count', data);

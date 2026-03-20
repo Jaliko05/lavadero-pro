@@ -21,6 +21,7 @@ import Inventory from '@/pages/Inventory';
 import Customers from '@/pages/Customers';
 import Reports from '@/pages/Reports';
 import SettingsPage from '@/pages/SettingsPage';
+import Payroll from '@/pages/Payroll';
 import SuperAdmin from '@/pages/SuperAdmin';
 
 // Washer pages
@@ -58,6 +59,7 @@ export default function App() {
             <Route path="/customers" element={<Customers />} />
             <Route path="/reports" element={<Reports />} />
             <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/payroll" element={<Payroll />} />
             <Route
               path="/super-admin"
               element={
